@@ -1,0 +1,41 @@
+FINANÇAS LULIS — como colocar no ar e instalar no iPhone
+
+ARQUIVOS (envie TODOS, mantendo a pasta "icons"):
+  index.html            o aplicativo
+  manifest.webmanifest  nome, cor e ícones para a tela de início
+  sw.js                 faz o app abrir sem internet
+  icons/                ícones do cofrinho
+
+1) COLOCAR NO AR (GitHub Pages, gratuito) — feito no computador
+  a. Crie uma conta em github.com
+  b. Clique em "+" (canto superior direito) > "New repository"
+     Nome: financas-lulis   |   marque "Public"   |   "Create repository"
+  c. Clique em "uploading an existing file"
+  d. Arraste PARA A JANELA os arquivos desta pasta (index.html, manifest.webmanifest,
+     sw.js, LEIA-ME.txt) e a pasta "icons" inteira. Clique em "Commit changes".
+  e. Vá em "Settings" > "Pages" (menu da esquerda)
+     Em "Branch", escolha "main" e "/ (root)" > "Save"
+  f. Espere 1 a 2 minutos e recarregue a página. Aparece o link:
+     https://SEU-USUARIO.github.io/financas-lulis/
+
+2) INSTALAR NO IPHONE
+  a. Abra o link no SAFARI
+  b. Toque em Compartilhar (quadrado com seta para cima)
+  c. Role e toque em "Adicionar à Tela de Início"
+  d. Confira o nome "Finanças Lulis" e toque em "Adicionar"
+  e. Abra SEMPRE pelo ícone do cofrinho (não pelo Safari)
+
+3) PRIMEIRA ABERTURA
+  Criar PIN de 6 dígitos > confirmar > ativar Face ID (o iPhone pede permissão)
+  > responder as perguntas iniciais (salário, cartão, investimentos, bens).
+
+ATUALIZAR O APP DEPOIS
+  No GitHub, abra o repositório > "Add file" > "Upload files" > envie o novo index.html
+  > "Commit changes". No iPhone, feche o app e abra de novo (às vezes 2 vezes).
+  Os dados dela NÃO são apagados na atualização.
+
+IMPORTANTE
+  - Os dados ficam só no iPhone dela. O link no GitHub tem apenas o código.
+  - Se o ícone do app for apagado, os dados vão junto: faça o backup
+    (Lançar > Cadastros > Backup > Enviar backup > WhatsApp > "Você").
+  - Esqueceu o PIN: "Esqueci o PIN" apaga tudo e recomeça; depois é só Restaurar o backup.
