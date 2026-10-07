@@ -475,7 +475,6 @@ nav button.on .ic{background:var(--brand);color:#fff}
         <div class="field"><label for="c-sal">Salário líquido</label><input id="c-sal" type="text" inputmode="decimal"></div>
         <div class="field"><label for="c-day">Dia que cai</label><input id="c-day" type="number" min="1" max="31"></div>
       </div>
-      <label class="chk"><input type="checkbox" id="c-next"><span><b>O salário paga as contas do mês seguinte</b><br>Ex.: cai dia 30 de outubro e paga as faturas de novembro. Ele passa a contar em novembro. No saldo da conta, continua entrando no dia em que caiu.</span></label>
       <button class="btn" onclick="saveFixed()">Salvar salário</button>
       <div class="hint">O salário é lançado sozinho todo mês. Outras rendas (freela, bônus, Pix recebido) entram em Lançar › Entrada, com o valor de cada mês.</div>
     </div>
@@ -699,7 +698,7 @@ async function load(){
       const rk=DB.tx.filter(t=>t.rec).map(t=>t.date.getFullYear()+'-'+String(t.date.getMonth()+1).padStart(2,'0')).sort();
       const n=new Date();DB.fixed.since=rk[0]||(n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0'));
     }
-    if(DB.fixed.sal&&DB.fixed.next===undefined){DB.fixed.next=DB.fixed.day>=25;DB.fixed._mig=true}
+    if('next' in DB.fixed){delete DB.fixed.next;DB.tx.forEach(t=>{delete t.ref});DB.fixed._mig2=true}
     /* remove "outras rendas" duplicadas pela versão anterior */
     const seen=new Set();DB.tx=DB.tx.filter(t=>{if(!t.rec)return true;const k=t.rec+'|'+t.date.getFullYear()+'-'+t.date.getMonth();if(seen.has(k))return false;seen.add(k);return true});
     /* "outras rendas" deixam de ser automáticas: as já lançadas viram lançamentos normais */
@@ -745,17 +744,24 @@ function dayLabel(d){
 /* mês em que o dinheiro efetivamente sai da conta (fluxo de caixa) */
 function comp(t){
   const c=t.card?DB.cards.find(x=>x.id===t.card):null;
-  if(!c){
-    if(t.ref==='next'){let y=t.date.getFullYear(),m=t.date.getMonth()+1;if(m>11){m=0;y++}return {y,m}}
-    return {y:t.date.getFullYear(),m:t.date.getMonth()};
-  }
+  if(!c)return {y:t.date.getFullYear(),m:t.date.getMonth()};
   let y=t.date.getFullYear(),m=t.date.getMonth();
   /* compra no próprio dia do fechamento já vai para a fatura seguinte */
   if(t.date.getDate()>=Math.min(c.close,daysIn(y,m))){m++;if(m>11){m=0;y++}}
   if(c.due<=c.close){m++;if(m>11){m=0;y++}}
   return {y,m};
 }
-function inMonth(t,y,m){const c=comp(t);return c.y===y&&c.m===m}
+/* mês de referência (consumo): compra no cartão conta no mês anterior ao vencimento da fatura;
+   o resto conta no próprio mês. comp() continua sendo o mês em que o dinheiro sai (vencimento). */
+function refOf(t){
+  const k=comp(t);
+  if(!t.card||!DB.cards.some(c=>c.id===t.card))return k;
+  let y=k.y,m=k.m-1;if(m<0){m=11;y--}return {y,m};
+}
+function inMonth(t,y,m){const c=refOf(t);return c.y===y&&c.m===m}
+const nextYM=(y,m)=>m===11?{y:y+1,m:0}:{y,m:m+1};
+/* fatura do mês de referência (y,m) = a que vence no mês seguinte */
+function invRef(c,y,m){const n=nextYM(y,m);return invInfo(c,n.y,n.m)}
 const monthTx=(y=VIEW.y,m=VIEW.m)=>DB.tx.filter(t=>inMonth(t,y,m));
 function prevRef(){let y=VIEW.y,m=VIEW.m-1;if(m<0){m=11;y--}return{y,m}}
 const isCurrent=()=>VIEW.y===TODAY.getFullYear()&&VIEW.m===TODAY.getMonth();
@@ -768,7 +774,7 @@ function invInfo(c,y,m){
   const due=dueDateOf(c,y,m);
   let cy=y,cm=m;if(c.due<=c.close){cm--;if(cm<0){cm=11;cy--}}
   const close=new Date(cy,cm,Math.min(c.close,daysIn(cy,cm)));
-  const txs=DB.tx.filter(x=>x.card===c.id&&inMonth(x,y,m));
+  const txs=DB.tx.filter(x=>{if(x.card!==c.id)return false;const k=comp(x);return k.y===y&&k.m===m});
   const total=txs.reduce((a,b)=>a-b.val,0);
   const status=TODAY>due?'paga':TODAY>=close?'fechada':'aberta';
   return {due,close,txs,total,status};
@@ -784,7 +790,7 @@ function runRecurring(){
   DB.recSkip=DB.recSkip||[];
   const items=[];
   if(DB.fixed.sal){if(!DB.fixed.since)DB.fixed.since=cur;
-    items.push({rec:'sal',since:DB.fixed.since,day:DB.fixed.day,desc:'Salário',val:DB.fixed.sal,cat:'renda',acc:'Conta',card:null,ref:DB.fixed.next?'next':null})}
+    items.push({rec:'sal',since:DB.fixed.since,day:DB.fixed.day,desc:'Salário',val:DB.fixed.sal,cat:'renda',acc:'Conta',card:null})}
   (DB.bills||[]).forEach(b=>{const card=b.acc&&b.acc.startsWith('card:')?b.acc.slice(5):null;
     if(card&&!DB.cards.some(c=>c.id===card))return;
     items.push({rec:'bill:'+b.id,since:b.since||cur,day:b.day,desc:b.n,val:-Math.abs(b.val),cat:b.cat,acc:card?'Cartão':b.acc,card})});
@@ -793,7 +799,7 @@ function runRecurring(){
     items.forEach(it=>{
       if(k<it.since||!it.val||DB.recSkip.includes(it.rec+'|'+k))return;
       if(DB.tx.some(t=>t.rec===it.rec&&t.date.getFullYear()===yy&&t.date.getMonth()===mm))return;
-      DB.tx.push({id:uid(),date:new Date(yy,mm,Math.min(it.day,daysIn(yy,mm))),desc:it.desc,val:it.val,cat:it.cat,acc:it.acc,card:it.card,rec:it.rec,cr:Date.now(),...(it.ref?{ref:it.ref}:{})});
+      DB.tx.push({id:uid(),date:new Date(yy,mm,Math.min(it.day,daysIn(yy,mm))),desc:it.desc,val:it.val,cat:it.cat,acc:it.acc,card:it.card,rec:it.rec,cr:Date.now()});
     });
   }
 }
@@ -900,13 +906,15 @@ function render(){
   const sai=t.filter(x=>x.val<0).reduce((a,b)=>a-b.val,0);
   const dias=daysIn(VIEW.y,VIEW.m), el=Math.max(elapsed(),1);
   /* dia em que cada saída bate na conta: cartão no vencimento da fatura */
-  const dayOf=x=>x.card?Math.min(DB.cards.find(c=>c.id===x.card)?.due||1,dias):x.date.getDate();
+  /* cada gasto entra no dia da compra; compra de outro mês que caiu nesta fatura vai para a borda do mês */
+  const m0=new Date(VIEW.y,VIEW.m,1),m1=new Date(VIEW.y,VIEW.m,dias);
+  const dayOf=x=>x.date<m0?1:x.date>m1?dias:x.date.getDate();
   const cut=isCurrent()?TODAY.getDate():isFuture()?0:dias;
   const outs=t.filter(x=>x.val<0);
   const realized=outs.filter(x=>dayOf(x)<=cut), sched=outs.filter(x=>dayOf(x)>cut);
   const realSum=realized.reduce((a,b)=>a-b.val,0);
   /* ritmo do dia a dia: só débito/Pix/dinheiro; faturas não entram no ritmo */
-  const rate=isCurrent()?realized.filter(x=>!x.card&&!x.rec).reduce((a,b)=>a-b.val,0)/Math.max(cut,1):0;
+  const rate=isCurrent()?realized.filter(x=>!x.rec&&!x.parc).reduce((a,b)=>a-b.val,0)/Math.max(cut,1):0;
   const media=realSum/Math.max(cut,1);
   const projAt=d=>realSum+rate*Math.max(0,d-cut)+sched.filter(x=>dayOf(x)<=d).reduce((a,b)=>a-b.val,0);
   const projTotal=isCurrent()?projAt(dias):sai;
@@ -928,7 +936,7 @@ function render(){
   document.getElementById('h-l2').textContent=isCurrent()?`dia ${TODAY.getDate()} de ${dias}`:isFuture()?'mês futuro':'mês fechado';
 
   document.getElementById('k-media').textContent=brl0(isCurrent()?rate:media);
-  document.getElementById('k-media-d').textContent=isFuture()?'mês ainda não começou':isCurrent()?`débito, Pix e dinheiro, fora contas fixas, em ${Math.max(cut,1)} dia(s)`:`em ${dias} dias, com faturas`;
+  document.getElementById('k-media-d').textContent=isFuture()?'mês ainda não começou':isCurrent()?`sem contas fixas e parcelas, em ${Math.max(cut,1)} dia(s)`:`em ${dias} dias`;
   document.getElementById('k-proj-l').textContent=isCurrent()?'Previsão do mês':isFuture()?'Já agendado':'Total gasto';
   document.getElementById('k-proj').textContent=brl0(projTotal);
   const kp=document.getElementById('k-proj-d');
@@ -940,30 +948,30 @@ function render(){
   lineChart(document.getElementById('chartLine'),acc,proj,dias);
   const pendF=sched.reduce((a,b)=>a-b.val,0);
   document.getElementById('projNote').innerHTML=isCurrent()
-    ?`Linha cheia: o que já saiu da conta até hoje. Tracejada: previsão até o fim do mês, somando ${pendF?`<b>${brl0(pendF)}</b> em faturas e contas que ainda vão vencer e `:''}o ritmo atual dos outros gastos no débito e Pix.`
+    ?`Linha cheia: o que já foi gasto até hoje, pela data da compra. Tracejada: previsão até o fim do mês, somando ${pendF?`<b>${brl0(pendF)}</b> em contas e parcelas já agendadas e `:''}o ritmo atual dos gastos.`
     :isFuture()?`Só o que já está agendado: faturas e parcelas que vencem neste mês.`
-    :`Faturas de cartão contam no dia do vencimento, que é quando o dinheiro sai da conta.`;
+    :`Gastos pela data da compra. No cartão, contam no mês da fatura.`;
 
   /* faturas no início */
   const fat=document.getElementById('cardFatura');
   if(DB.cards.length){
     fat.style.display='block';
-    fat.innerHTML=`<div class="ch">Faturas que vencem em ${MNL[VIEW.m]} <a onclick="goto('cartoes')">Detalhes</a></div>`+DB.cards.map(c=>{
-      const f=invInfo(c,VIEW.y,VIEW.m);const ST=STATUS[f.status];
+    fat.innerHTML=`<div class="ch">Faturas de ${MNL[VIEW.m]} <a onclick="goto('cartoes')">Detalhes</a></div>`+DB.cards.map(c=>{
+      const f=invRef(c,VIEW.y,VIEW.m);const ST=STATUS[f.status];
       return `<div class="tx" onclick="SELCARD='${c.id}';goto('cartoes')">
         <span class="tile" style="background:linear-gradient(140deg,${c.color},${shade(c.color,-.45)});color:#fff"><svg viewBox="0 0 24 24"><rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path d="M3 10h18"/></svg></span>
         <div class="tx-main"><div class="tx-desc">${esc(c.n)}</div><div class="tx-meta">vence ${ddm(f.due)}</div></div>
         <div class="tx-val">${brl(f.total)}<small><span class="pill ${ST[1]}" style="padding:1px 8px;font-size:11px">${ST[0]}</span></small></div></div>`}).join('')
       +`<div style="display:flex;justify-content:space-between;align-items:baseline;border-top:1px solid var(--line);margin-top:6px;padding-top:12px">
-        <span style="font-weight:600">Total em cartões</span><span class="tx-val num" style="font-size:18px">${brl(DB.cards.reduce((a,c)=>a+invInfo(c,VIEW.y,VIEW.m).total,0))}</span></div>`;
+        <span style="font-weight:600">Total em cartões</span><span class="tx-val num" style="font-size:18px">${brl(DB.cards.reduce((a,c)=>a+invRef(c,VIEW.y,VIEW.m).total,0))}</span></div>`;
   }else fat.style.display='none';
 
   /* parcelas futuras */
-  const pend=DB.tx.filter(x=>x.parc&&x.val<0&&(()=>{const k=comp(x);return k.y>TODAY.getFullYear()||(k.y===TODAY.getFullYear()&&k.m>TODAY.getMonth())})());
+  const pend=DB.tx.filter(x=>x.parc&&x.val<0&&(()=>{const k=refOf(x);return k.y>TODAY.getFullYear()||(k.y===TODAY.getFullYear()&&k.m>TODAY.getMonth())})());
   const pc=document.getElementById('cardParcelas');
   if(pend.length){
     const tot=pend.reduce((a,b)=>a-b.val,0);
-    const by={};pend.forEach(x=>{const k=comp(x);const key=k.y+'-'+String(k.m).padStart(2,'0');by[key]=(by[key]||0)-x.val});
+    const by={};pend.forEach(x=>{const k=refOf(x);const key=k.y+'-'+String(k.m).padStart(2,'0');by[key]=(by[key]||0)-x.val});
     const keys=Object.keys(by).sort();const mx=Math.max(...Object.values(by));
     pc.style.display='block';
     pc.innerHTML=`<div class="ch">Parcelas que ainda vão cair</div>
@@ -1031,13 +1039,13 @@ function renderCards(){
   }
   if(!DB.cards.find(c=>c.id===SELCARD))SELCARD=DB.cards[0].id;
   row.classList.toggle('multi',DB.cards.length>1);
-  row.innerHTML=DB.cards.map(c=>{const f=invInfo(c,VIEW.y,VIEW.m);
+  row.innerHTML=DB.cards.map(c=>{const f=invRef(c,VIEW.y,VIEW.m);
     return `<div class="cc ${c.id===SELCARD?'sel':''}" style="--c:${c.color};--c2:${shade(c.color,-.5)}" onclick="SELCARD='${c.id}';renderCards()" role="button" aria-label="${esc(c.n)}">
       <div class="cc-top"><span class="cc-name">${esc(c.n)}</span><span class="cc-chip"></span></div>
       <div class="cc-bot"><div><div class="cc-lbl">Fatura de ${MNL[VIEW.m]}</div><div class="cc-val num">${brl(f.total)}</div></div>
       <div class="cc-due">vence<br><b>${ddm(f.due)}</b></div></div></div>`}).join('');
 
-  const c=DB.cards.find(x=>x.id===SELCARD), f=invInfo(c,VIEW.y,VIEW.m), ST=STATUS[f.status];
+  const c=DB.cards.find(x=>x.id===SELCARD), f=invRef(c,VIEW.y,VIEW.m), ST=STATUS[f.status];
   const dleft=Math.round((f.due-TODAY)/864e5);
   const lastBuy=new Date(f.close.getFullYear(),f.close.getMonth(),f.close.getDate()-1);
   const sub=f.status==='aberta'?`Recebe compras até ${ddm(lastBuy)}. A partir de ${ddm(f.close)}, vão para a próxima`
@@ -1055,7 +1063,7 @@ function renderCards(){
   }
 
   /* próximas faturas */
-  const months=[];for(let i=0;i<6;i++){const d=new Date(VIEW.y,VIEW.m+i,1);months.push({y:d.getFullYear(),m:d.getMonth(),v:invInfo(c,d.getFullYear(),d.getMonth()).total})}
+  const months=[];for(let i=0;i<6;i++){const d=new Date(VIEW.y,VIEW.m+i,1);months.push({y:d.getFullYear(),m:d.getMonth(),v:invRef(c,d.getFullYear(),d.getMonth()).total})}
   const mxv=Math.max(...months.map(x=>x.v),1);
   const cols=months.map((x,i)=>`<div class="col ${i===0?'now':''}"><span class="cv">${x.v?brl0(x.v).replace('R$ ',''):''}</span>
      <span class="cb"><i style="height:${Math.max(3,x.v/mxv*100)}%;background:${c.color};opacity:${i===0?1:.45}"></i></span><span class="cm">${MN[x.m]}</span></div>`).join('');
@@ -1198,9 +1206,8 @@ function renderCfg(){
 function txRow(x){
   const card=x.card?DB.cards.find(k=>k.id===x.card):null;
   const meta=[dd(x.date),card?card.n:x.acc];
-  if(card){const k=comp(x);meta.push('fatura de '+MN[k.m])}
+  if(card){const k=refOf(x);meta.push('fatura de '+MN[k.m])}
   if(x.parc)meta.push(`${x.parc.i}/${x.parc.n}`);
-  if(x.ref==='next'){const k=comp(x);meta.push('conta em '+MNL[k.m])}
   if(x.rec)meta.push('automático');
   if(!card&&x.date>TODAY)meta.push('agendado');
   return `<div class="tx" onclick="editTx('${x.id}')">${catIcon(x.val>0&&x.cat==='outros'?'renda':x.cat)}
@@ -1251,7 +1258,7 @@ function addManual(){
   }
   document.getElementById('m-val').value='';document.getElementById('m-desc').value='';CAT_TOUCHED=false;
   document.getElementById('m-parc').value=1;parcHint();
-  const k=comp(DB.tx[DB.tx.length-n]);VIEW={y:k.y,m:k.m};
+  const k=refOf(DB.tx[DB.tx.length-n]);VIEW={y:k.y,m:k.m};
   save();toast(n>1?`${n} parcelas criadas`:'Lançamento salvo');render();
 }
 function editTx(id){
@@ -1297,21 +1304,16 @@ function delTx(id){
   if(t.rec){DB.recSkip=DB.recSkip||[];DB.recSkip.push(t.rec+'|'+ymKey(t.date.getFullYear(),t.date.getMonth()))}
   closeSheet();save();toast('Excluído');render();
 }
-function applySalRef(){
-  DB.tx.forEach(t=>{if(t.rec==='sal'){if(DB.fixed.next)t.ref='next';else delete t.ref}});
-  const cur=ymKey(TODAY.getFullYear(),TODAY.getMonth());
-  if(DB.fixed.next&&(!DB.fixed.since||DB.fixed.since>=cur)){const p=new Date(TODAY.getFullYear(),TODAY.getMonth()-1,1);DB.fixed.since=ymKey(p.getFullYear(),p.getMonth())}
-}
 function saveFixed(){
   DB.fixed={...DB.fixed,sal:parseNum(document.getElementById('c-sal').value),
     day:Math.min(31,Math.max(1,parseInt(document.getElementById('c-day').value)||5)),
-    extra:0,next:document.getElementById('c-next').checked};
+    extra:0};
   /* o valor novo vale do mês atual em diante; meses passados ficam como estavam */
   const cur=ymKey(TODAY.getFullYear(),TODAY.getMonth());
   DB.tx=DB.tx.filter(t=>!(t.rec==='sal'&&t.date>TODAY));
   DB.recSkip=(DB.recSkip||[]).filter(x=>!(x.startsWith('sal|')&&x.split('|')[1]>=cur));
   if(!DB.fixed.since||DB.fixed.since>cur)DB.fixed.since=cur;
-  applySalRef();runRecurring();save();toast('Salário salvo');render();
+  runRecurring();save();toast('Salário salvo');render();
 }
 function addCard(){
   const n=document.getElementById('cd-n').value.trim();if(!n){toast('Informe o nome do cartão');return}
@@ -1694,7 +1696,7 @@ function commitCsv(){
   let novos=0,dup=0;
   PENDING.forEach(p=>{const k=p.date.getTime()+'|'+p.desc+'|'+p.val;
     if(keys.has(k)){dup++;return}keys.add(k);DB.tx.push(p);novos++});
-  const k=comp(PENDING[PENDING.length-1]);VIEW={y:k.y,m:k.m};
+  const k=refOf(PENDING[PENDING.length-1]);VIEW={y:k.y,m:k.m};
   PENDING=[];document.getElementById('csvPreview').innerHTML='';document.getElementById('csvText').value='';
   save();toast(`${novos} importados${dup?', '+dup+' repetidos ignorados':''}`);goto('painel');
 }
@@ -1714,8 +1716,8 @@ let OSTEP=0;
 const STEPS=[
  {h:'Qual é o seu salário?',s:'O app lança o salário sozinho todo mês, no dia certo.',f:`
    <div class="field"><label for="o-sal">Salário líquido</label><input id="o-sal" inputmode="decimal" placeholder="0,00"></div>
-   <div class="field"><label for="o-day">Dia em que cai na conta</label><input id="o-day" type="number" min="1" max="31" value="5" oninput="document.getElementById('o-next').checked=+this.value>=25"></div>
-   <label class="chk"><input type="checkbox" id="o-next"><span><b>O salário paga as contas do mês seguinte</b><br>Marque se ele cai no fim do mês e é usado nas faturas do mês seguinte.</span></label>
+   <div class="field"><label for="o-day">Dia em que cai na conta</label><input id="o-day" type="number" min="1" max="31" value="5"></div>
+
    <div class="field"><label for="o-bal">Saldo na conta hoje (opcional)</label><input id="o-bal" inputmode="decimal" placeholder="0,00"></div>
    <div class="hint">Outras rendas que mudam de mês para mês você lança como Entrada, quando receber.</div>`},
  {h:'Seu cartão de crédito',s:'Com o dia de fechamento, cada compra vai para a fatura certa. Compras no dia do fechamento já caem na fatura seguinte.',f:`
@@ -1749,8 +1751,7 @@ function onbShow(){
 }
 function onbNext(){
   const g=id=>{const e=document.getElementById(id);return e?e.value:''};
-  if(OSTEP===0){DB.fixed={sal:parseNum(g('o-sal')),day:Math.min(31,Math.max(1,parseInt(g('o-day'))||5)),extra:0,next:document.getElementById('o-next').checked};
-    if(DB.fixed.next)applySalRef();
+  if(OSTEP===0){DB.fixed={sal:parseNum(g('o-sal')),day:Math.min(31,Math.max(1,parseInt(g('o-day'))||5)),extra:0};
     if(g('o-bal').trim())DB.acct={bal:parseNum(g('o-bal')),date:iso(TODAY),ts:Date.now()}}
   if(OSTEP===1&&g('o-cn').trim())DB.cards.push({id:uid(),n:g('o-cn').trim(),close:parseInt(g('o-cc'))||25,due:parseInt(g('o-cd'))||5,limit:parseNum(g('o-cl'))||0,color:CC_COLORS[0]});
   if(OSTEP===2){
@@ -1775,7 +1776,6 @@ function onbFinish(){
 function fillCfgInputs(){
   document.getElementById('c-sal').value=DB.fixed.sal?DB.fixed.sal.toFixed(2).replace('.',','):'';
   document.getElementById('c-day').value=DB.fixed.day;
-  document.getElementById('c-next').checked=!!DB.fixed.next;
 
 }
 
@@ -2133,7 +2133,16 @@ document.addEventListener('keydown',e=>{if(!LK.mode)return;if(/^[0-9]$/.test(e.k
     fillCfgInputs();runRecurring();
   }
   render();document.getElementById('m-cat').value='alimenta';onAccChange();
-  if(DB.fixed._mig){delete DB.fixed._mig;applySalRef();runRecurring();save();render()}
+  if(DB.fixed._mig2){
+    delete DB.fixed._mig2;
+    const ks=DB.tx.filter(t=>!t.rec).map(t=>{const k=refOf(t);return ymKey(k.y,k.m)}).sort();
+    const first=ks[0]||ymKey(TODAY.getFullYear(),TODAY.getMonth());
+    if(DB.fixed.since&&DB.fixed.since<first){
+      DB.tx=DB.tx.filter(t=>!(t.rec==='sal'&&ymKey(t.date.getFullYear(),t.date.getMonth())<first));
+      DB.fixed.since=first;
+    }
+    runRecurring();save();render();
+  }
   if(had)autoUpdate();
   lockInit();renderSec();
   /* PWA: funciona offline e guarda os dados de forma persistente */
