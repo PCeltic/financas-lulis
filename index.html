@@ -670,6 +670,29 @@ const DEF_RULES=[['IFOOD','alimenta'],['RAPPI','alimenta'],['MERCADO','alimenta'
 
 let TODAY;function setToday(){const n=new Date();TODAY=new Date(n.getFullYear(),n.getMonth(),n.getDate())}setToday();
 let VIEW={y:TODAY.getFullYear(),m:TODAY.getMonth()};
+/* campos de data dos formulários acompanham o "hoje".
+   force=true: volta tudo para hoje (ao abrir/voltar para o app). Sem force: só mexe no que ainda está no valor automático. */
+let DATE_AUTO='';
+function refreshDateFields(force){
+  const hoje=iso(TODAY);
+  ['m-date','p-dt','f-dt'].forEach(id=>{
+    const el=document.getElementById(id);if(!el)return;
+    if(force||!el.value||el.value===DATE_AUTO)el.value=hoje;
+  });
+  DATE_AUTO=hoje;
+}
+/* confere se o dia mudou (app que ficou aberto em segundo plano); devolve true se mudou */
+function dayRollover(){
+  const antes=TODAY.getTime();setToday();
+  const mudou=TODAY.getTime()!==antes;
+  if(mudou){
+    runRecurring();
+    const a=new Date(antes);
+    if(VIEW.y===a.getFullYear()&&VIEW.m===a.getMonth())VIEW={y:TODAY.getFullYear(),m:TODAY.getMonth()};
+  }
+  refreshDateFields(true);
+  return mudou;
+}
 let SCREEN='painel', FILTER='all', TYPE='out', BDTYPE='bem', SELCARD=null, CCOLOR=CC_COLORS[0];
 let DB={tx:[],pos:[],cards:[],bens:[],dividas:[],rules:DEF_RULES.slice(),
         fixed:{sal:0,day:5,extra:0},lastSalary:'',bills:[],acct:null,goal:null,
@@ -1530,8 +1553,7 @@ async function updateQuotes(){
 let AUTO_RUNNING=false;
 async function autoUpdate(){
   if(AUTO_RUNNING)return;AUTO_RUNNING=true;
-  const antes=TODAY.getTime();setToday();
-  if(TODAY.getTime()!==antes){runRecurring();const n=new Date();if(VIEW.y===new Date(antes).getFullYear()&&VIEW.m===new Date(antes).getMonth())VIEW={y:TODAY.getFullYear(),m:TODAY.getMonth()}}
+  dayRollover();
   try{
     const age=t=>t?Date.now()-new Date(t).getTime():Infinity;
     const jobs=[];
@@ -2121,9 +2143,7 @@ document.addEventListener('keydown',e=>{if(!LK.mode)return;if(/^[0-9]$/.test(e.k
 (async function(){
   const had=await load();
   CCOLOR=CC_COLORS[DB.cards.length%CC_COLORS.length];
-  document.getElementById('m-date').value=iso(TODAY);
-  document.getElementById('p-dt').value=iso(TODAY);
-  document.getElementById('f-dt').value=iso(TODAY);
+  refreshDateFields(true);
   fillRateInputs();
   document.getElementById('p-token').value=DB.token||'';
   idxHint();
@@ -2149,7 +2169,11 @@ document.addEventListener('keydown',e=>{if(!LK.mode)return;if(/^[0-9]$/.test(e.k
   if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostname==='localhost'))navigator.serviceWorker.register('sw.js').catch(()=>{});
   try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
   /* app que fica aberto em segundo plano: atualiza ao voltar para ele */
-  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&!document.getElementById('onb').classList.contains('on'))autoUpdate()});
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState!=='visible'||document.getElementById('onb').classList.contains('on'))return;
+    if(dayRollover()){save();render()}
+    autoUpdate();
+  });
 })();
 </script>
 </body>
